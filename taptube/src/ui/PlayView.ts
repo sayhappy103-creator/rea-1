@@ -156,7 +156,8 @@ export class PlayView {
     const song = this.cfg.song;
     store.addHistory(song);
 
-    // Beat-synth clock stays authoritative when the video is not embeddable.
+    // Prepare YouTube playback in the background; the beat-synth clock drives
+    // the chart until real video time is available.
     if (
       store.settings.videoBgMode === "video" &&
       store.settings.streamingMode === "always"
@@ -173,7 +174,18 @@ export class PlayView {
         this.engine?.enableSynthClock(true);
         void code;
       });
-      await this.playback.prepare();
+      void this.playback.prepare().then(() => {
+        if (!this.playback) return;
+        if (this.playback.fallbackMode) {
+          this.engine?.enableSynthClock(true);
+          this.videoLayer.style.opacity = "0";
+        } else {
+          this.playback.setVolume(72);
+          this.engine?.enableSynthClock(false);
+          void this.playback.seek(0);
+          void this.playback.play();
+        }
+      });
     } else {
       this.videoLayer.style.display = "none";
     }
@@ -195,18 +207,7 @@ export class PlayView {
       (hud) => this.updateHud(hud),
       (result) => this.complete(result)
     );
-
-    if (this.playback) {
-      await this.playback.prepare();
-      if (this.playback.fallbackMode) {
-        this.engine.enableSynthClock(true);
-      } else {
-        await this.playback.seek(0);
-      }
-      this.playback.setVolume(store.settings.videoBrightness > 0 ? 72 : 0);
-    } else {
-      this.engine.enableSynthClock(true);
-    }
+    this.engine.enableSynthClock(true);
 
     this.showCountdown(3);
   }

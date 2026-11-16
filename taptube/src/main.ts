@@ -43,6 +43,26 @@ class App {
     this.root.className = "app-root";
     this.mountLobby();
     this.handleNativeShareIntent();
+    (window as any).__taptubeBack = () => {
+      if (this.screen === "play") {
+        const pauseBtn = this.playView?.el.querySelector(
+          "[data-pause]"
+        ) as HTMLElement | null;
+        pauseBtn?.click();
+        return true;
+      }
+      if (this.screen === "result" || this.screen === "edit") {
+        this.destroyAll();
+        this.mountLobby();
+        return true;
+      }
+      const openModal = document.querySelector(".modal-backdrop.show .modal-close");
+      if (openModal instanceof HTMLElement) {
+        openModal.click();
+        return true;
+      }
+      return false;
+    };
     window.addEventListener("resize", () => this.syncOrientationClass());
   }
 
