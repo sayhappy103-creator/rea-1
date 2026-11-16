@@ -225,7 +225,7 @@ public class MainActivity extends AppCompatActivity {
         });
     }
 
-    void setImmersive(boolean enabled) {
+    void applyImmersive(boolean enabled) {
         runOnUiThread(() -> {
             View decor = getWindow().getDecorView();
             if (enabled) {
