@@ -1,0 +1,122 @@
+name: Build TapTube Reborn APK
+
+on:
+  workflow_dispatch:
+  push:
+    branches:
+      - arena/a0023d3e-rea-1
+    paths:
+      - "taptube/**"
+      - ".github/workflows/build-taptube-apk.yml"
+
+permissions:
+  contents: write
+
+env:
+  HUSKY: "0"
+  NODE_OPTIONS: "--max-old-space-size=2048"
+
+jobs:
+  build-apk:
+    name: Build universal signed APK
+    runs-on: ubuntu-24.04
+    timeout-minutes: 40
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "17"
+
+      - uses: android-actions/setup-android@v3
+
+      - name: Install Android SDK packages
+        run: |
+          sdkmanager --install "platforms;android-34" "build-tools;34.0.0" "platform-tools"
+          yes | sdkmanager --licenses > /dev/null || true
+
+      - name: Setup Gradle
+        uses: gradle/actions/setup-gradle@v4
+        with:
+          gradle-version: "8.7"
+
+      - name: Install web dependencies
+        working-directory: taptube
+        run: npm install --no-audit --no-fund
+
+      - name: Type-check and build web bundle
+        working-directory: taptube
+        run: npm run build
+
+      - name: Stage web assets into Android project
+        working-directory: taptube
+        run: |
+          rm -rf android/app/src/main/assets/web
+          mkdir -p android/app/src/main/assets/web
+          cp -R web-dist/. android/app/src/main/assets/web/
+          test -f android/app/src/main/assets/web/index.html
+
+      - name: Generate release keystore
+        working-directory: taptube/android
+        run: |
+          keytool -genkeypair -v \
+            -keystore taptube-reborn.jks \
+            -alias taptube \
+            -keyalg RSA -keysize 2048 -validity 10000 \
+            -storepass taptube165 -keypass taptube165 \
+            -dname "CN=TapTube Reborn, OU=CleanRoom, O=TapTubeReborn, L=ChiangMai, C=TH" \
+            -storetype JKS
+          cat > keystore.properties <<'EOF'
+          storeFile=taptube-reborn.jks
+          storePassword=taptube165
+          keyAlias=taptube
+          keyPassword=taptube165
+          EOF
+
+      - name: Assemble release APK
+        working-directory: taptube/android
+        run: gradle --no-daemon assembleRelease
+
+      - name: Collect APK
+        run: |
+          mkdir -p out
+          cp taptube/android/app/build/outputs/apk/release/app-release.apk \
+             out/TapTube-1.6.5-Reborn-NoIAP.apk
+          ls -lh out
+
+      - name: Verify v1 + v2 + v3 signatures
+        run: |
+          BT="$ANDROID_HOME/build-tools/34.0.0"
+          "$BT/apksigner" verify --verbose --print-certs out/TapTube-1.6.5-Reborn-NoIAP.apk
+
+      - name: Show APK manifest summary
+        run: |
+          BT="$ANDROID_HOME/build-tools/34.0.0"
+          "$BT/aapt2" dump badging out/TapTube-1.6.5-Reborn-NoIAP.apk | head -20
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: TapTube-1.6.5-Reborn-NoIAP
+          path: out/TapTube-1.6.5-Reborn-NoIAP.apk
+          if-no-files-found: error
+          retention-days: 90
+
+      - name: Publish GitHub release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: taptube-reborn-1.6.5-noiap
+          name: TapTube Reborn 1.6.5 (No IAP)
+          body: |
+            **TapTube Reborn 1.6.5 — clean-room reconstruction (no in-app purchases)**
+
+            - All original gameplay formulas preserved (score scaling, fever stages, grades, rewards).
+            - Live YouTube search + playback directly inside the game.
+            - Universal APK, signed with v1 + v2 + v3, minSdk 24 / targetSdk 34.
+            - Any IAP/ads removed: everything is earned in-game.
+          files: out/TapTube-1.6.5-Reborn-NoIAP.apk
+          fail_on_unmatched_files: true

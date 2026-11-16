@@ -1,0 +1,16 @@
+{
+  "name": "taptube-reborn",
+  "version": "1.6.5",
+  "private": true,
+  "type": "module",
+  "description": "TapTube 1.6.5 Clean-Room Open Reconstruction (Zero IAP, Live YouTube Search & Rhythm Gameplay)",
+  "scripts": {
+    "dev": "vite --host 0.0.0.0 --port 5173",
+    "build": "tsc --noEmit && vite build",
+    "preview": "vite preview --host 0.0.0.0 --port 5173"
+  },
+  "devDependencies": {
+    "typescript": "^5.7.3",
+    "vite": "^6.2.0"
+  }
+}
