@@ -2,6 +2,8 @@ package com.taptube.reborn;
 
 import android.content.Context;
 import android.content.Intent;
+import android.media.AudioAttributes;
+import android.media.MediaPlayer;
 import android.net.ConnectivityManager;
 import android.net.NetworkInfo;
 import android.os.Build;
@@ -42,6 +44,24 @@ public class TapTubeBridge {
 
     private final MainActivity activity;
     private final WebView webView;
+
+    // ---------------------------------------------------------------------
+    // Native audio fallback.
+    //
+    // WebView-embedded YouTube players are frequently blocked (age gating,
+    // referrer checks, codec/DRM quirks), which is exactly why players saw a
+    // silent game. This path resolves the audio stream through InnerTube's
+    // /player endpoint and plays it with MediaPlayer, independent of the
+    // iframe. It is the guaranteed soundtrack for every chart.
+    // ---------------------------------------------------------------------
+    private final Object audioLock = new Object();
+    private MediaPlayer audioPlayer;
+    private String audioVideoId = "";
+    private String audioState = "idle"; // idle | loading | ready | error | ended
+    private String audioError = "";
+    private long audioDurationMs = 0;
+    private int audioVolumePct = 100;
+    private long audioSeekPending = -1;
 
     TapTubeBridge(MainActivity activity, WebView webView) {
         this.activity = activity;
@@ -406,6 +426,8 @@ public class TapTubeBridge {
             conn.setRequestProperty("User-Agent",
                     "Mozilla/5.0 (Linux; Android 13; Pixel 7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0.0.0 Mobile Safari/537.36");
             conn.setRequestProperty("Origin", "https://www.youtube.com");
+            conn.setRequestProperty("X-YouTube-Client-Name", "1");
+            conn.setRequestProperty("X-YouTube-Client-Version", CLIENT_VERSION);
             conn.setRequestProperty("Accept-Language", "th,en;q=0.8");
             byte[] payload = jsonBody.getBytes(StandardCharsets.UTF_8);
             conn.setFixedLengthStreamingMode(payload.length);
@@ -426,6 +448,297 @@ public class TapTubeBridge {
             return null;
         } finally {
             if (conn != null) conn.disconnect();
+        }
+    }
+
+
+    // =================== native audio (MediaPlayer) ===================
+
+    @JavascriptInterface
+    public void audioPrepare(String videoId) {
+        if (videoId == null || videoId.isEmpty()) return;
+        synchronized (audioLock) {
+            if ("loading".equals(audioState) && videoId.equals(audioVideoId)) return;
+            audioVideoId = videoId;
+            audioState = "loading";
+            audioError = "";
+            audioDurationMs = 0;
+        }
+        final String vid = videoId;
+        new Thread(() -> {
+            String url = null;
+            long durationMs = 0;
+            String err = "";
+            String[][] clients = {
+                    {"ANDROID", "19.09.37"},
+                    {"IOS", "19.09.3"},
+                    {"ANDROID_VR", "1.60.19"},
+                    {"WEB_EMBEDDED_PLAYER", "1.20240723.01.00"},
+                    {"MWEB", "2.20240726.01.00"},
+            };
+            for (String[] c : clients) {
+                try {
+                    String body = playerRequest(vid, c[0], c[1]);
+                    if (body == null) {
+                        err = "no response (" + c[0] + ")";
+                        continue;
+                    }
+                    JSONObject root = new JSONObject(body);
+                    JSONObject status = root.optJSONObject("playabilityStatus");
+                    if (status != null && !"OK".equals(status.optString("status", ""))) {
+                        err = status.optString("status") + ": " + status.optString("reason");
+                        continue;
+                    }
+                    url = pickAudioUrl(root);
+                    JSONObject details = root.optJSONObject("videoDetails");
+                    if (details != null) {
+                        try {
+                            durationMs = (long) (Double.parseDouble(details.optString("lengthSeconds", "0")) * 1000);
+                        } catch (Exception ignored) {
+                        }
+                    }
+                    if (url != null) break;
+                    err = "no audio stream (" + c[0] + ")";
+                } catch (Exception e) {
+                    err = String.valueOf(e.getMessage());
+                }
+            }
+            audioRelease();
+            if (url == null) {
+                synchronized (audioLock) {
+                    audioState = "error";
+                    audioError = err.isEmpty() ? "unresolved" : err;
+                }
+                return;
+            }
+            synchronized (audioLock) {
+                audioDurationMs = durationMs;
+            }
+            startAudio(url);
+        }, "taptube-audio-resolve").start();
+    }
+
+    @JavascriptInterface
+    public String audioStatus() {
+        JSONObject out = new JSONObject();
+        try {
+            synchronized (audioLock) {
+                out.put("state", audioState);
+                out.put("error", audioError);
+                out.put("durationMs", audioDurationMs);
+            }
+        } catch (JSONException ignored) {
+        }
+        return out.toString();
+    }
+
+    @JavascriptInterface
+    public void audioStart() {
+        activity.runOnUiThread(() -> {
+            try {
+                if (audioPlayer != null && !audioPlayer.isPlaying()) audioPlayer.start();
+            } catch (Exception ignored) {
+            }
+        });
+    }
+
+    @JavascriptInterface
+    public void audioPause() {
+        activity.runOnUiThread(() -> {
+            try {
+                if (audioPlayer != null && audioPlayer.isPlaying()) audioPlayer.pause();
+            } catch (Exception ignored) {
+            }
+        });
+    }
+
+    @JavascriptInterface
+    public void audioSeekTo(int positionMs) {
+        final int ms = Math.max(0, positionMs);
+        activity.runOnUiThread(() -> {
+            try {
+                if (audioPlayer != null) {
+                    audioPlayer.seekTo(ms);
+                } else {
+                    synchronized (audioLock) {
+                        audioSeekPending = ms;
+                    }
+                }
+            } catch (Exception ignored) {
+            }
+        });
+    }
+
+    @JavascriptInterface
+    public int audioPositionMs() {
+        synchronized (audioLock) {
+            try {
+                if (audioPlayer != null) return audioPlayer.getCurrentPosition();
+            } catch (Exception ignored) {
+            }
+            return 0;
+        }
+    }
+
+    @JavascriptInterface
+    public boolean audioIsPlaying() {
+        synchronized (audioLock) {
+            try {
+                return audioPlayer != null && audioPlayer.isPlaying();
+            } catch (Exception ignored) {
+                return false;
+            }
+        }
+    }
+
+    @JavascriptInterface
+    public void audioSetVolume(int percent) {
+        audioVolumePct = Math.max(0, Math.min(100, percent));
+        final float v = audioVolumePct / 100f;
+        activity.runOnUiThread(() -> {
+            try {
+                if (audioPlayer != null) audioPlayer.setVolume(v, v);
+            } catch (Exception ignored) {
+            }
+        });
+    }
+
+    @JavascriptInterface
+    public void audioRelease() {
+        synchronized (audioLock) {
+            audioState = "idle";
+        }
+        activity.runOnUiThread(this::releaseAudioInternal);
+    }
+
+    private void releaseAudioInternal() {
+        synchronized (audioLock) {
+            try {
+                if (audioPlayer != null) {
+                    audioPlayer.reset();
+                    audioPlayer.release();
+                }
+            } catch (Exception ignored) {
+            }
+            audioPlayer = null;
+            audioSeekPending = -1;
+        }
+    }
+
+    private void startAudio(String url) {
+        activity.runOnUiThread(() -> {
+            try {
+                MediaPlayer mp = new MediaPlayer();
+                mp.setAudioAttributes(new AudioAttributes.Builder()
+                        .setUsage(AudioAttributes.USAGE_MEDIA)
+                        .setContentType(AudioAttributes.CONTENT_TYPE_MUSIC)
+                        .build());
+                final float vol = audioVolumePct / 100f;
+                mp.setOnPreparedListener(p -> {
+                    try {
+                        p.setVolume(vol, vol);
+                        long seek;
+                        synchronized (audioLock) {
+                            seek = audioSeekPending;
+                            audioSeekPending = -1;
+                        }
+                        if (seek > 0) p.seekTo((int) seek);
+                        p.start();
+                        synchronized (audioLock) {
+                            audioState = "ready";
+                            audioError = "";
+                        }
+                    } catch (Exception e) {
+                        synchronized (audioLock) {
+                            audioState = "error";
+                            audioError = String.valueOf(e.getMessage());
+                        }
+                    }
+                });
+                mp.setOnErrorListener((p, what, extra) -> {
+                    synchronized (audioLock) {
+                        audioState = "error";
+                        audioError = "media " + what + "/" + extra;
+                    }
+                    return true;
+                });
+                mp.setOnCompletionListener(p -> {
+                    synchronized (audioLock) {
+                        audioState = "ended";
+                    }
+                });
+                mp.setDataSource(url);
+                synchronized (audioLock) {
+                    audioPlayer = mp;
+                }
+                mp.prepareAsync();
+            } catch (Exception e) {
+                synchronized (audioLock) {
+                    audioState = "error";
+                    audioError = String.valueOf(e.getMessage());
+                }
+            }
+        });
+    }
+
+    private String playerRequest(String videoId, String clientName, String clientVersion)
+            throws Exception {
+        JSONObject client = new JSONObject();
+        client.put("clientName", clientName);
+        client.put("clientVersion", clientVersion);
+        client.put("hl", "th");
+        client.put("gl", "TH");
+        if ("ANDROID".equals(clientName) || "ANDROID_VR".equals(clientName)) {
+            client.put("androidSdkVersion", 30);
+            client.put("osName", "Android");
+            client.put("osVersion", "11");
+            if ("ANDROID_VR".equals(clientName)) {
+                client.put("deviceMake", "Oculus");
+                client.put("deviceModel", "Quest 3");
+            }
+        } else if ("IOS".equals(clientName)) {
+            client.put("deviceModel", "iPhone14,3");
+            client.put("osName", "iPhone");
+            client.put("osVersion", "15.6.0.19G71");
+        }
+        JSONObject ctx = new JSONObject();
+        ctx.put("client", client);
+        JSONObject payload = new JSONObject();
+        payload.put("context", ctx);
+        payload.put("videoId", videoId);
+        payload.put("contentCheckOk", true);
+        payload.put("racyCheckOk", true);
+        return httpPost(
+                "https://www.youtube.com/youtubei/v1/player?prettyPrint=false",
+                payload.toString());
+    }
+
+    /** Highest-bitrate progressive AAC/MP4 audio track (best MediaPlayer support). */
+    private String pickAudioUrl(JSONObject root) {
+        try {
+            JSONObject sd = root.optJSONObject("streamingData");
+            if (sd == null) return null;
+            JSONArray formats = sd.optJSONArray("adaptiveFormats");
+            if (formats == null) return null;
+            String best = null;
+            long bestBitrate = -1;
+            for (int i = 0; i < formats.length(); i++) {
+                JSONObject f = formats.optJSONObject(i);
+                if (f == null) continue;
+                String mime = f.optString("mimeType", "");
+                String url = f.optString("url", "");
+                // Ciphered formats need signature solving; skip them.
+                if (url.isEmpty() || !url.startsWith("http")) continue;
+                if (!mime.startsWith("audio/mp4") && !mime.startsWith("audio/webm")) continue;
+                long br = f.optLong("bitrate", 0);
+                if (br > bestBitrate) {
+                    bestBitrate = br;
+                    best = url;
+                }
+            }
+            return best;
+        } catch (Exception e) {
+            return null;
         }
     }
 

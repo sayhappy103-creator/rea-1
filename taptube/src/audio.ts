@@ -10,6 +10,31 @@ class SoundEngine {
   private noiseBuffer: AudioBuffer | null = null;
   private longHoldOsc: OscillatorNode | null = null;
   private longHoldGain: GainNode | null = null;
+  private master: GainNode | null = null;
+  private muted = false;
+  private unlocked = false;
+
+  /** Single destination used by every cue, so muting/volume is centralised. */
+  private bus(ctx: AudioContext): AudioNode {
+    if (!this.master) {
+      this.master = ctx.createGain();
+      this.master.gain.value = this.muted ? 0 : 1;
+      this.master.connect(ctx.destination);
+    }
+    return this.master;
+  }
+
+  /** Mute/unmute the whole FX bus (used when the user silences the game). */
+  public setMasterMuted(muted: boolean): void {
+    this.muted = muted;
+    if (this.master && this.ctx) {
+      this.master.gain.setTargetAtTime(muted ? 0 : 1, this.ctx.currentTime, 0.01);
+    }
+  }
+
+  public isMuted(): boolean {
+    return this.muted;
+  }
 
   private ensureContext(): AudioContext | null {
     if (typeof window === "undefined") return null;
@@ -24,6 +49,19 @@ class SoundEngine {
     if (this.ctx.state === "suspended") {
       this.ctx.resume().catch(() => {});
     }
+    const AC2 = this.ctx;
+    if (AC2.state === "suspended") {
+      // Best-effort: a silent 1-sample buffer often unlocks iOS/WebView audio.
+      try {
+        const b = AC2.createBuffer(1, 1, 22050);
+        const s = AC2.createBufferSource();
+        s.buffer = b;
+        s.connect(AC2.destination);
+        s.start(0);
+      } catch {
+        /* ignore */
+      }
+    }
     if (!this.noiseBuffer && this.ctx) {
       const length = Math.floor(this.ctx.sampleRate * 0.18);
       const buf = this.ctx.createBuffer(1, length, this.ctx.sampleRate);
@@ -36,8 +74,36 @@ class SoundEngine {
     return this.ctx;
   }
 
+  /** Must be called from a user gesture: resumes the AudioContext for good. */
   public unlock(): void {
-    this.ensureContext();
+    const ctx = this.ensureContext();
+    if (!ctx) return;
+    const resume = () => {
+      if (!this.ctx) return;
+      if (this.ctx.state === "suspended") {
+        void this.ctx.resume().catch(() => {});
+      }
+    };
+    resume();
+    if (!this.unlocked) {
+      this.unlocked = true;
+      const events: Array<keyof DocumentEventMap> = [
+        "pointerdown",
+        "touchstart",
+        "keydown",
+        "click",
+      ];
+      events.forEach((evt) =>
+        document.addEventListener(evt, resume, { passive: true })
+      );
+      document.addEventListener("visibilitychange", () => {
+        if (document.visibilityState === "visible") resume();
+      });
+    }
+  }
+
+  public contextState(): string {
+    return this.ctx ? this.ctx.state : "none";
   }
 
   public vibrate(ms: number): void {
@@ -66,7 +132,7 @@ class SoundEngine {
     osc.frequency.exponentialRampToValueAtTime(heavy ? 240 : 440, now + 0.065);
     gain.gain.setValueAtTime(heavy ? 0.22 : 0.14, now);
     gain.gain.exponentialRampToValueAtTime(0.001, now + 0.07);
-    osc.connect(gain).connect(ctx.destination);
+    osc.connect(gain).connect(this.bus(ctx));
     osc.start(now);
     osc.stop(now + 0.075);
   }
@@ -83,7 +149,7 @@ class SoundEngine {
     osc.frequency.exponentialRampToValueAtTime(on ? 860 : 460, now + 0.08);
     gain.gain.setValueAtTime(0.15, now);
     gain.gain.exponentialRampToValueAtTime(0.001, now + 0.085);
-    osc.connect(gain).connect(ctx.destination);
+    osc.connect(gain).connect(this.bus(ctx));
     osc.start(now);
     osc.stop(now + 0.09);
   }
@@ -114,7 +180,7 @@ class SoundEngine {
         const g = ctx.createGain();
         g.gain.setValueAtTime(0.28 * vol, now);
         g.gain.exponentialRampToValueAtTime(0.001, now + 0.055);
-        src.connect(hp).connect(g).connect(ctx.destination);
+        src.connect(hp).connect(g).connect(this.bus(ctx));
         src.start(now);
         src.stop(now + 0.06);
       }
@@ -125,7 +191,7 @@ class SoundEngine {
       osc.frequency.exponentialRampToValueAtTime(520, now + 0.045);
       g2.gain.setValueAtTime(0.25 * vol, now);
       g2.gain.exponentialRampToValueAtTime(0.001, now + 0.05);
-      osc.connect(g2).connect(ctx.destination);
+      osc.connect(g2).connect(this.bus(ctx));
       osc.start(now);
       osc.stop(now + 0.055);
     } else if (id === 2) {
@@ -143,7 +209,7 @@ class SoundEngine {
       g.gain.exponentialRampToValueAtTime(0.001, now + 0.14);
       osc.connect(g);
       osc2.connect(g);
-      g.connect(ctx.destination);
+      g.connect(this.bus(ctx));
       osc.start(now);
       osc2.start(now);
       osc.stop(now + 0.15);
@@ -160,7 +226,7 @@ class SoundEngine {
         const g = ctx.createGain();
         g.gain.setValueAtTime(0.42 * vol, now);
         g.gain.exponentialRampToValueAtTime(0.001, now + 0.085);
-        src.connect(bp).connect(g).connect(ctx.destination);
+        src.connect(bp).connect(g).connect(this.bus(ctx));
         src.start(now);
         src.stop(now + 0.09);
       }
@@ -173,7 +239,7 @@ class SoundEngine {
       osc.frequency.exponentialRampToValueAtTime(85, now + 0.075);
       g.gain.setValueAtTime(0.4 * vol, now);
       g.gain.exponentialRampToValueAtTime(0.001, now + 0.085);
-      osc.connect(g).connect(ctx.destination);
+      osc.connect(g).connect(this.bus(ctx));
       osc.start(now);
       osc.stop(now + 0.09);
     } else {
@@ -185,7 +251,7 @@ class SoundEngine {
       osc.frequency.setValueAtTime(1120 + lane * 80, now + 0.022);
       g.gain.setValueAtTime(0.15 * vol, now);
       g.gain.exponentialRampToValueAtTime(0.001, now + 0.065);
-      osc.connect(g).connect(ctx.destination);
+      osc.connect(g).connect(this.bus(ctx));
       osc.start(now);
       osc.stop(now + 0.07);
     }
@@ -201,8 +267,8 @@ class SoundEngine {
     const gain = ctx.createGain();
     osc.type = "sine";
     osc.frequency.setValueAtTime(660, ctx.currentTime);
-    gain.gain.setValueAtTime(0.06 * vol, ctx.currentTime);
-    osc.connect(gain).connect(ctx.destination);
+    gain.gain.setValueAtTime(0.09 * vol, ctx.currentTime);
+    osc.connect(gain).connect(this.bus(ctx));
     osc.start();
     this.longHoldOsc = osc;
     this.longHoldGain = gain;
@@ -238,7 +304,7 @@ class SoundEngine {
     osc.frequency.linearRampToValueAtTime(98, now + 0.14);
     g.gain.setValueAtTime(0.18 * vol, now);
     g.gain.exponentialRampToValueAtTime(0.001, now + 0.15);
-    osc.connect(g).connect(ctx.destination);
+    osc.connect(g).connect(this.bus(ctx));
     osc.start(now);
     osc.stop(now + 0.16);
   }
@@ -257,7 +323,7 @@ class SoundEngine {
       osc.frequency.setValueAtTime(freq, t0);
       g.gain.setValueAtTime(0.14, t0);
       g.gain.exponentialRampToValueAtTime(0.001, t0 + 0.28);
-      osc.connect(g).connect(ctx.destination);
+      osc.connect(g).connect(this.bus(ctx));
       osc.start(t0);
       osc.stop(t0 + 0.3);
     });
@@ -273,7 +339,7 @@ class SoundEngine {
     osc.frequency.setValueAtTime(accent ? 1480 : 1020, now);
     g.gain.setValueAtTime(0.24, now);
     g.gain.exponentialRampToValueAtTime(0.001, now + 0.045);
-    osc.connect(g).connect(ctx.destination);
+    osc.connect(g).connect(this.bus(ctx));
     osc.start(now);
     osc.stop(now + 0.05);
   }
@@ -307,16 +373,18 @@ class SoundEngine {
       osc.frequency.setValueAtTime(freq, t0);
       g.gain.setValueAtTime(0.18, t0);
       g.gain.exponentialRampToValueAtTime(0.001, t0 + 0.25);
-      osc.connect(g).connect(ctx.destination);
+      osc.connect(g).connect(this.bus(ctx));
       osc.start(t0);
       osc.stop(t0 + 0.27);
     });
   }
 
   /** Optional musical synth pulse for Synth Fallback Mode when an MV blocks embedding */
-  public playBeatSynthStep(stepIndex: number, bpm: number): void {
+  public playBeatSynthStep(stepIndex: number, bpm: number, volume = 0.8): void {
     const ctx = this.ensureContext();
     if (!ctx) return;
+    const mix = Math.max(0, Math.min(1, volume));
+    if (mix <= 0.01) return;
     const now = ctx.currentTime;
     const beatDur = 60 / Math.max(80, Math.min(200, bpm));
     // Kick on 0, 2
@@ -326,9 +394,9 @@ class SoundEngine {
       kick.type = "sine";
       kick.frequency.setValueAtTime(140, now);
       kick.frequency.exponentialRampToValueAtTime(42, now + 0.12);
-      kg.gain.setValueAtTime(0.28, now);
+      kg.gain.setValueAtTime(0.5 * mix, now);
       kg.gain.exponentialRampToValueAtTime(0.001, now + 0.14);
-      kick.connect(kg).connect(ctx.destination);
+      kick.connect(kg).connect(this.bus(ctx));
       kick.start(now);
       kick.stop(now + 0.15);
     }
@@ -341,9 +409,9 @@ class SoundEngine {
     const sg = ctx.createGain();
     synth.type = "triangle";
     synth.frequency.setValueAtTime(freq, now);
-    sg.gain.setValueAtTime(0.11, now);
+    sg.gain.setValueAtTime(0.2 * mix, now);
     sg.gain.exponentialRampToValueAtTime(0.001, now + beatDur * 0.85);
-    synth.connect(sg).connect(ctx.destination);
+    synth.connect(sg).connect(this.bus(ctx));
     synth.start(now);
     synth.stop(now + beatDur * 0.9);
   }

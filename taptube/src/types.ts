@@ -144,6 +144,8 @@ export interface GameSettings {
   youtubeApiKey: string;
   normalFx: boolean;
   gameFxVolume: number; // 0..100
+  musicVolume: number; // 0..100 (video + synth backing)
+  videoVolume: number; // 0..100 (YouTube soundtrack)
   missVibration: boolean;
   touchVibration: boolean;
   touchSound: TouchSoundId;
@@ -252,6 +254,16 @@ export interface TapTubeNativeBridge {
   shareText?: (title: string, text: string) => void;
   getSharedYoutubeUrl?: () => string;
   isAndroidApp?: () => boolean;
+  /** Native soundtrack (MediaPlayer) — guaranteed audio when the iframe is blocked. */
+  audioPrepare?: (videoId: string) => void;
+  audioStatus?: () => string;
+  audioStart?: () => void;
+  audioPause?: () => void;
+  audioSeekTo?: (positionMs: number) => void;
+  audioPositionMs?: () => number;
+  audioIsPlaying?: () => boolean;
+  audioSetVolume?: (percent: number) => void;
+  audioRelease?: () => void;
 }
 
 declare global {

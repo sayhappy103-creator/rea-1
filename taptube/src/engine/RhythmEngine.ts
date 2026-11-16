@@ -75,6 +75,7 @@ export class RhythmEngine {
 
   // Drift-smoothed clock anchored to YT.Player when active
   private useSynthClock = false;
+  private musicVol = 0.8;
 
   constructor(
     private canvas: HTMLCanvasElement,
@@ -127,6 +128,12 @@ export class RhythmEngine {
 
   public enableSynthClock(enabled: boolean): void {
     this.useSynthClock = enabled;
+    if (!enabled) this.lastSynthStep = -1;
+  }
+
+  /** Volume for the synthesized backing groove (0..100). */
+  public setMusicVolume(percent: number): void {
+    this.musicVol = Math.max(0, Math.min(1, percent / 100));
   }
 
   public start(): void {
@@ -443,11 +450,21 @@ export class RhythmEngine {
       } else {
         this.songTimeMs += dtMs;
         if (this.useSynthClock) {
+          // Schedule against the AudioContext clock so the groove stays steady
+          // even when the tab throttles requestAnimationFrame.
           const halfBeatMs = 30000 / Math.max(80, this.bpm);
           const step = Math.floor(this.songTimeMs / halfBeatMs);
+          if (this.lastSynthStep < 0) this.lastSynthStep = step - 1;
           if (step > this.lastSynthStep) {
+            const gap = Math.min(4, step - this.lastSynthStep);
+            for (let i = 1; i <= gap; i++) {
+              soundEngine.playBeatSynthStep(
+                this.lastSynthStep + i,
+                this.bpm,
+                this.musicVol
+              );
+            }
             this.lastSynthStep = step;
-            soundEngine.playBeatSynthStep(step, this.bpm);
           }
         }
       }

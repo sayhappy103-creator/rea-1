@@ -10,6 +10,7 @@ import {
 } from "../types";
 import { RhythmEngine, HudSnapshot } from "../engine/RhythmEngine";
 import { YouTubePlayback } from "../playback";
+import { NativeAudioPlayback, hasNativeAudio } from "../nativeAudio";
 import { icon } from "./icons";
 import { esc, fmtInt } from "./dom";
 import { tt } from "./TopBar";
@@ -32,6 +33,8 @@ export class PlayView {
   private videoLayer!: HTMLElement;
   private engine: RhythmEngine | null = null;
   private playback: YouTubePlayback | null = null;
+  /** Real soundtrack via native MediaPlayer (Android). Takes priority. */
+  private nativeAudio: NativeAudioPlayback | null = null;
   private paused = false;
   private hudTimer = 0;
   private lastBeatMs = 0;
@@ -39,6 +42,8 @@ export class PlayView {
   private metronomeOn = false;
   private finished = false;
   private lastCombo = 0;
+  private usingSynth = false;
+  private lastStallCheck = 0;
   private slideTimer = 0;
 
   constructor(
@@ -48,6 +53,8 @@ export class PlayView {
     this.el = document.createElement("section");
     this.el.className = `play-view ${cfg.options.orientation}`;
     this.render();
+    document.addEventListener("visibilitychange", this.onVisibility);
+    window.addEventListener("taptube:resume-audio", this.onVisibility);
     this.boot();
   }
 
@@ -86,6 +93,7 @@ export class PlayView {
           <div class="warn-actions">
             <button class="btn tiny primary" data-alt-audio>${icon("search", 12)} ${esc(tt("find_alt"))}</button>
             <button class="btn tiny ghost" data-synth-mode>${icon("volume", 12)} ${esc(tt("btn_play_synth_mode"))}</button>
+            <button class="btn tiny ghost" data-unmute>${icon("volume", 12)} ${esc(tt("btn_fix_sound"))}</button>
           </div>
         </div>
       </div>
@@ -109,6 +117,10 @@ export class PlayView {
             </div>
           </div>
           <div class="pause-sync">
+            <label>${esc(tt("music_volume"))} <b data-music-val>${store.settings.musicVolume}%</b></label>
+            <input class="range" type="range" min="0" max="100" value="${store.settings.musicVolume}" data-music-range />
+          </div>
+          <div class="pause-sync">
             <label>${esc(tt("note_sync"))} <b data-sync-val>${store.settings.noteSyncMs}ms</b></label>
             <input class="range" type="range" min="-400" max="400" step="10" value="${store.settings.noteSyncMs}" data-sync-range />
           </div>
@@ -126,12 +138,33 @@ export class PlayView {
     this.el.querySelector("[data-synth-mode]")?.addEventListener("click", () => {
       this.dismissWarning();
       this.engine?.enableSynthClock(true);
+      this.nativeAudio?.destroy();
+      this.nativeAudio = null;
       this.playback?.destroy();
       this.playback = null;
       (this.el.querySelector("[data-warn]") as HTMLElement).hidden = true;
     });
     this.el.querySelector("[data-alt-audio]")?.addEventListener("click", () => {
       void this.findAlternativeAudio();
+    });
+    this.el.querySelector("[data-unmute]")?.addEventListener("click", () => {
+      soundEngine.unlock();
+      store.updateSettings({
+        musicVolume: Math.max(60, store.settings.musicVolume),
+        videoVolume: Math.max(80, store.settings.videoVolume),
+        gameFxVolume: Math.max(60, store.settings.gameFxVolume),
+      });
+      this.engine?.setMusicVolume(store.settings.musicVolume);
+      this.nativeAudio?.setVolume(store.settings.videoVolume);
+      this.nativeAudio?.ensureAudible();
+      this.playback?.setVolume(store.settings.videoVolume);
+      this.playback?.ensureAudible();
+      if (!this.usingSynth) {
+        this.usingSynth = false;
+        this.engine?.enableSynthClock(!this.playback || this.playback.fallbackMode);
+      }
+      void this.playback?.play();
+      toast(tt("sound_fixed"), "ok");
     });
 
     this.el.querySelector("[data-pause]")?.addEventListener("click", () => this.openPause());
@@ -156,6 +189,16 @@ export class PlayView {
           .forEach((n) => n.classList.toggle("on", n === b));
       })
     );
+    const musicRange = this.el.querySelector<HTMLInputElement>("[data-music-range]");
+    musicRange?.addEventListener("input", () => {
+      const v = Number(musicRange.value);
+      store.updateSettings({ musicVolume: v });
+      this.engine?.setMusicVolume(v);
+      this.nativeAudio?.setVolume(store.settings.videoVolume ?? 85);
+      this.playback?.setVolume(this.nativeAudio ? 0 : store.settings.videoVolume ?? 85);
+      const label = this.el.querySelector("[data-music-val]");
+      if (label) label.textContent = `${v}%`;
+    });
     const syncRange = this.el.querySelector<HTMLInputElement>("[data-sync-range]");
     syncRange?.addEventListener("input", () => {
       const v = Number(syncRange.value);
@@ -240,6 +283,23 @@ export class PlayView {
       }
       this.cfg.song = alt;
       const layer = this.el.querySelector("[data-video]") as HTMLElement;
+      if (hasNativeAudio()) {
+        this.nativeAudio?.destroy();
+        this.nativeAudio = new NativeAudioPlayback(alt, store.settings, window.TapTubeNative!);
+        this.nativeAudio.onError(() => this.onNativeAudioFailed());
+        this.nativeAudio.setVolume(store.settings.videoVolume ?? 85);
+        await this.nativeAudio.prepare();
+        if (!this.nativeAudio.fallbackMode) {
+          this.nativeAudio.setVolume(store.settings.videoVolume ?? 85);
+          await this.nativeAudio.play();
+          this.usingSynth = false;
+          this.engine?.enableSynthClock(false);
+          this.dismissWarning();
+          toast(`✓ ${alt.title.slice(0, 42)}`, "ok");
+          return;
+        }
+        this.nativeAudio = null;
+      }
       if (!this.playback) {
         this.playback = new YouTubePlayback(layer, alt, store.settings);
         this.playback.onError(() => {
@@ -254,8 +314,10 @@ export class PlayView {
         toast(tt("embed_error"), "warn");
         return;
       }
-      this.playback.setVolume(72);
+      this.playback.setVolume(store.settings.videoVolume ?? 85);
+      this.playback.ensureAudible();
       await this.playback.play();
+      this.usingSynth = false;
       this.engine?.enableSynthClock(false);
       toast(`✓ ${alt.title.slice(0, 42)}`, "ok");
     } catch {
@@ -267,35 +329,79 @@ export class PlayView {
     const song = this.cfg.song;
     store.addHistory(song);
 
-    // Prepare YouTube playback in the background; the beat-synth clock drives
-    // the chart until real video time is available.
-    if (store.settings.videoBgMode === "video" && !this.isWifiOnlyBlocked()) {
+    // Audio must be unlocked from this (user-initiated) navigation.
+    soundEngine.unlock();
+
+    const wantVideo = store.settings.videoBgMode === "video";
+    const nativeOk = !this.isWifiOnlyBlocked() && hasNativeAudio();
+
+    if (nativeOk) {
+      // Guaranteed audio: native MediaPlayer stream (works even when the
+      // YouTube iframe refuses to embed).
+      this.nativeAudio = new NativeAudioPlayback(
+        song,
+        store.settings,
+        window.TapTubeNative!
+      );
+      this.nativeAudio.setVolume(store.settings.videoVolume ?? 85);
+      this.nativeAudio.onError(() => this.onNativeAudioFailed());
+      void this.nativeAudio.prepare().then(() => {
+        if (!this.nativeAudio || this.nativeAudio.fallbackMode) return;
+        this.nativeAudio.setVolume(store.settings.videoVolume ?? 85);
+        void this.nativeAudio.play();
+        this.usingSynth = false;
+        this.engine?.enableSynthClock(false);
+      });
+    }
+
+    // The iframe is only used for the moving picture when native audio runs.
+    const wantIframe = wantVideo && !this.isWifiOnlyBlocked();
+    if (wantIframe) {
       this.playback = new YouTubePlayback(
         this.videoLayer,
         song,
         store.settings
       );
-      this.playback.onError((code) => {
-        const warn = this.el.querySelector("[data-warn]") as HTMLElement;
-        if (warn) warn.hidden = false;
-        this.videoLayer.style.opacity = "0";
-        this.engine?.enableSynthClock(true);
-        void code;
-      });
+      this.playback.onError(() => this.onVideoUnavailable());
+      if (this.nativeAudio) this.playback.setSoundEnabled(false);
       void this.playback.prepare().then(() => {
-        if (!this.playback) return;
-        if (this.playback.fallbackMode) {
-          this.engine?.enableSynthClock(true);
-          this.videoLayer.style.opacity = "0";
-        } else {
-          this.playback.setVolume(72);
-          this.engine?.enableSynthClock(false);
-          void this.playback.seek(0);
-          void this.playback.play();
+        const pb = this.playback;
+        if (!pb) return;
+        if (pb.fallbackMode) {
+          this.onVideoUnavailable();
+          return;
         }
+        // The real song is audible: run the chart on the video clock and keep
+        // the backing synth silent so the two never play on top of each other.
+        if (!this.nativeAudio) {
+          this.usingSynth = false;
+          this.engine?.enableSynthClock(false);
+        }
+        // With native audio the iframe is visual-only: keep it muted so the two
+        // soundtracks never overlap.
+        pb.setVolume(this.nativeAudio ? 0 : store.settings.videoVolume ?? 85);
+        pb.ensureAudible();
+        void pb.seek(0);
+        void pb.play();
+        // Re-assert audibility once the player reports PLAYING.
+        window.setTimeout(() => {
+          if (this.playback && !this.playback.fallbackMode && !this.usingSynth) {
+            this.playback.setVolume(store.settings.videoVolume ?? 85);
+            this.playback.ensureAudible();
+          }
+        }, 900);
       });
     } else {
       this.videoLayer.style.display = "none";
+      const bg = this.el.querySelector("[data-bg]") as HTMLElement;
+      if (bg) {
+        bg.style.backgroundImage = `url("${song.thumbnail}")`;
+        bg.style.opacity = "0.55";
+      }
+    }
+    if (!nativeOk && !wantIframe) {
+      this.usingSynth = true;
+      this.showSynthBadge();
     }
 
     const notes = this.cfg.chartNotes;
@@ -307,17 +413,76 @@ export class PlayView {
       store.user.level,
       this.cfg.options,
       store.settings,
-      () => {
-        if (!this.playback || this.playback.fallbackMode) return null;
-        const t = this.playback.getCurrentTime();
-        return t !== null && t > 0 ? t : null;
-      },
+      () => this.primaryClockSeconds(),
       (hud) => this.updateHud(hud),
       (result) => this.complete(result)
     );
-    this.engine.enableSynthClock(true);
+    this.engine.setMusicVolume(store.settings.musicVolume ?? 80);
+    // Only start on the synth clock when nothing else can carry the song.
+    this.engine.enableSynthClock(!nativeOk && (!wantIframe || this.usingSynth));
 
     this.showCountdown(3);
+  }
+
+  /** Video time only when the player is actually producing sound/frames. */
+  private primaryClockSeconds(): number | null {
+    if (this.nativeAudio && !this.nativeAudio.fallbackMode && !this.usingSynth) {
+      const nt = this.nativeAudio.getCurrentTime();
+      if (nt !== null && nt > 0) return nt;
+    }
+    if (!this.playback || this.playback.fallbackMode) return null;
+    if (this.usingSynth) return null;
+    const t = this.playback.getCurrentTime();
+    return t !== null && t > 0 ? t : null;
+  }
+
+  private showSynthBadge(): void {
+    const warn = this.el.querySelector("[data-warn]") as HTMLElement;
+    if (warn) warn.hidden = false;
+    const videoLayer = this.videoLayer;
+    if (videoLayer) videoLayer.style.opacity = "0.35";
+    this.engine?.enableSynthClock(true);
+  }
+
+  /** Native stream failed (private/region-blocked video) — try iframe, else synth. */
+  private onNativeAudioFailed(): void {
+    this.nativeAudio = null;
+    if (this.playback && !this.playback.fallbackMode) {
+      this.playback.setVolume(store.settings.videoVolume ?? 85);
+      this.playback.ensureAudible();
+      void this.playback.play();
+      this.usingSynth = false;
+      this.engine?.enableSynthClock(false);
+      return;
+    }
+    // Keep the game audible right away with the synth groove; if the iframe
+    // turns out to work we hand the clock back to the real song.
+    this.showSynthBadge();
+    const wantIframe = store.settings.videoBgMode === "video" && !this.isWifiOnlyBlocked();
+    if (wantIframe && !this.playback) {
+      this.playback = new YouTubePlayback(this.videoLayer, this.cfg.song, store.settings);
+      this.playback.onError(() => this.onVideoUnavailable());
+      void this.playback.prepare().then(() => {
+        const pb = this.playback;
+        if (!pb || pb.fallbackMode) {
+          this.onVideoUnavailable();
+          return;
+        }
+        this.usingSynth = false;
+        this.engine?.enableSynthClock(false);
+        pb.setVolume(store.settings.videoVolume ?? 85);
+        pb.ensureAudible();
+        void pb.seek(0);
+        void pb.play();
+      });
+      return;
+    }
+    this.onVideoUnavailable();
+  }
+
+  private onVideoUnavailable(): void {
+    this.usingSynth = true;
+    this.showSynthBadge();
   }
 
   private showCountdown(from: number): void {
@@ -347,9 +512,30 @@ export class PlayView {
     step();
   }
 
+  private onVisibility = () => {
+    if (document.visibilityState !== "visible" || this.paused || this.finished) return;
+    soundEngine.unlock();
+    if (this.nativeAudio && !this.nativeAudio.fallbackMode) {
+      this.nativeAudio.play();
+    }
+    if (this.playback && !this.usingSynth) {
+      this.playback.setVolume(store.settings.videoVolume ?? 85);
+      this.playback.ensureAudible();
+      void this.playback.play();
+    }
+  };
+
   private beginPlay(): void {
     this.finished = false;
-    void this.playback?.play();
+    soundEngine.unlock();
+    if (this.nativeAudio && !this.nativeAudio.fallbackMode) {
+      this.nativeAudio.ensureAudible();
+      void this.nativeAudio.play();
+    }
+    if (this.playback && !this.playback.fallbackMode) {
+      this.playback.ensureAudible();
+      void this.playback.play();
+    }
     this.engine?.start();
     this.engine?.resume();
   }
@@ -381,6 +567,42 @@ export class PlayView {
     }
     this.lastCombo = hud.combo;
     const now = performance.now();
+    if (
+      this.nativeAudio &&
+      !this.usingSynth &&
+      !this.paused &&
+      now - this.lastStallCheck > 1200
+    ) {
+      this.lastStallCheck = now;
+      if (this.nativeAudio.isStalled(hud.songTimeMs)) {
+        this.nativeAudio = null;
+        if (this.playback && !this.playback.fallbackMode) {
+          this.playback.setVolume(store.settings.videoVolume ?? 85);
+          this.playback.ensureAudible();
+          void this.playback.play();
+        } else {
+          this.usingSynth = true;
+          this.showSynthBadge();
+        }
+      } else {
+        this.nativeAudio.ensureAudible();
+      }
+      return;
+    }
+    if (
+      this.playback &&
+      !this.usingSynth &&
+      !this.paused &&
+      now - this.lastStallCheck > 1200
+    ) {
+      this.lastStallCheck = now;
+      if (this.playback.isStalled(hud.songTimeMs)) {
+        this.usingSynth = true;
+        this.showSynthBadge();
+      } else {
+        this.playback.ensureAudible();
+      }
+    }
     const beatMs = 60000 / Math.max(60, this.cfg.bpm);
     if (
       this.metronomeOn &&
@@ -396,6 +618,7 @@ export class PlayView {
     if (this.finished || this.paused) return;
     this.paused = true;
     this.engine?.pause();
+    this.nativeAudio?.pause();
     this.playback?.pause();
     const layer = this.el.querySelector("[data-pause-layer]") as HTMLElement;
     layer.hidden = false;
@@ -412,6 +635,10 @@ export class PlayView {
 
   private closePause(): void {
     this.paused = false;
+    soundEngine.unlock();
+    this.nativeAudio?.ensureAudible();
+    void this.nativeAudio?.play();
+    this.playback?.ensureAudible();
     const layer = this.el.querySelector("[data-pause-layer]") as HTMLElement;
     layer.classList.remove("show");
     window.setTimeout(() => (layer.hidden = true), 160);
@@ -423,9 +650,11 @@ export class PlayView {
     if (this.finished) return;
     this.finished = true;
     this.engine?.pause();
+    this.nativeAudio?.pause();
     this.playback?.pause();
     const result = this.engine?.finishEarly() ?? null;
     this.engine?.destroy();
+    this.nativeAudio?.destroy();
     this.playback?.destroy();
     this.onExit(
       result
@@ -457,6 +686,7 @@ export class PlayView {
     this.finished = true;
     window.clearInterval(this.hudTimer);
     this.engine?.destroy();
+    this.nativeAudio?.destroy();
     this.playback?.destroy();
 
     const prev = store.user.records[result.video.videoId];
@@ -514,9 +744,12 @@ export class PlayView {
 
   public destroy(): void {
     window.TapTubeNative?.setImmersive?.(false);
+    document.removeEventListener("visibilitychange", this.onVisibility);
+    window.removeEventListener("taptube:resume-audio", this.onVisibility);
     window.clearInterval(this.hudTimer);
     window.clearInterval(this.slideTimer);
     this.engine?.destroy();
+    this.nativeAudio?.destroy();
     this.playback?.destroy();
     document.body.classList.remove("landscape", "portrait");
     this.el.remove();

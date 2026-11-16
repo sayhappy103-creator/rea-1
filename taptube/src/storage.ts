@@ -35,6 +35,8 @@ export const DEFAULT_SETTINGS: GameSettings = {
   youtubeApiKey: "",
   normalFx: true,
   gameFxVolume: 85,
+  musicVolume: 80,
+  videoVolume: 85,
   missVibration: true,
   touchVibration: true,
   touchSound: 1,

@@ -655,6 +655,15 @@ export function openSettings(): Modal {
           <input class="range" type="range" min="0" max="100" value="${s.gameFxVolume}" data-range="gameFxVolume" />
         </div>
         <div class="set-group">
+          <label class="set-label">${esc(tt("music_volume"))} — ${s.musicVolume}%</label>
+          <input class="range" type="range" min="0" max="100" value="${s.musicVolume}" data-range="musicVolume" />
+        </div>
+        <div class="set-group">
+          <label class="set-label">${esc(tt("video_volume"))} — ${s.videoVolume}%</label>
+          <input class="range" type="range" min="0" max="100" value="${s.videoVolume}" data-range="videoVolume" />
+          <p class="hint">${esc(tt("volume_hint"))}</p>
+        </div>
+        <div class="set-group">
           <label class="set-label">${esc(tt("hitsound"))}</label>
           <div class="seg">
             ${[1, 2, 3, 4, 5]
