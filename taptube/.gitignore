@@ -9,3 +9,4 @@ android/.gradle/
 android/app/src/main/assets/web/
 android/*.jks
 android/keystore.properties
+taptube/dist-apk/BUILD_ERROR.md
