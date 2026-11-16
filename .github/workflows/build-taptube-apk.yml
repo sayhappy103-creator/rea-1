@@ -89,7 +89,24 @@ jobs:
 
       - name: Assemble release APK
         working-directory: taptube/android
-        run: gradle --no-daemon assembleRelease
+        run: |
+          set -o pipefail
+          gradle --no-daemon --stacktrace assembleRelease 2>&1 | tee /tmp/gradle.log
+
+      - name: Publish build diagnostics on failure
+        if: failure()
+        run: |
+          mkdir -p taptube/dist-apk
+          {
+            echo "# Gradle failure log"
+            echo '```'
+            grep -viE "^(Download|> Task .* (UP-TO-DATE|NO-SOURCE|SKIPPED))" /tmp/gradle.log 2>/dev/null | tail -200 || true
+            echo '```'
+          } > taptube/dist-apk/BUILD_ERROR.md
+          git add -f taptube/dist-apk/BUILD_ERROR.md
+          git -c user.name=taptube-bot -c user.email=taptube-bot@users.noreply.github.com \
+            commit -m "ci(taptube): record gradle failure diagnostics" || true
+          git push || true
 
       - name: Collect APK
         run: |
