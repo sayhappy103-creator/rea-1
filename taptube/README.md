@@ -10,10 +10,13 @@ gameplay system reproduced from binary analysis and **all in-app purchases remov
 * 📺 Touch replays, rankings, attendance, gacha, mailbox, exchange shop (coins only)
 * 🌐 ไทย / English / 日本語 / 한국어
 * 📱 Ships as a universal, v1+v2+v3-signed APK (`minSdk 24`, `targetSdk 34`)
+* 🔊 Soundtrack plays through a native `MediaPlayer` stream (InnerTube `/player`)
+  so songs are audible even when the YouTube iframe refuses to embed; the iframe
+  is used for the moving picture only. Every FX cue runs through one WebAudio bus.
 
 ## Download
 
-* Google Drive: <https://drive.google.com/file/d/1RB2yb-J6wfXRT3TlkTtOG0I0b8N2auEe/view>
+* Google Drive: <https://drive.google.com/file/d/1hdNY8CbroAMQxp0OTCFYaLMVYoBASRXw/view>
 * GitHub Release: <https://github.com/sayhappy103-creator/rea-1/releases/tag/taptube-reborn-1.6.5-noiap>
 * Thai install guide: [`docs/INSTALL_TH.md`](docs/INSTALL_TH.md)
 
