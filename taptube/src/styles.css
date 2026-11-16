@@ -935,6 +935,36 @@ button {
   color: var(--text-dim);
 }
 
+.rate-stars {
+  display: flex;
+  justify-content: center;
+  gap: 8px;
+  padding: 12px 0;
+}
+
+.rate-star {
+  color: rgba(255, 255, 255, 0.22);
+  transition: transform 0.12s, color 0.12s;
+}
+
+.rate-star.on {
+  color: var(--gold);
+  filter: drop-shadow(0 0 8px rgba(255, 212, 38, 0.7));
+}
+
+.rate-star:active {
+  transform: scale(1.18);
+}
+
+.rank-scope {
+  flex: 0 0 auto;
+}
+
+.rank-scope .seg-btn {
+  padding: 4px 9px;
+  font-size: 9.5px;
+}
+
 /* Ranking */
 .rank-list {
   display: flex;
@@ -2071,11 +2101,25 @@ button {
   inset: 0;
 }
 
+.bg-layer {
+  position: absolute;
+  inset: 0;
+  background-position: center;
+  background-size: cover;
+  filter: blur(3px) saturate(1.1);
+  transition: opacity 0.4s;
+  opacity: 0;
+}
+
 .video-layer {
   position: absolute;
   inset: 0;
   overflow: hidden;
   transition: opacity 0.3s;
+}
+
+.video-layer {
+  transform-origin: center;
 }
 
 .video-layer iframe,
@@ -2292,6 +2336,13 @@ button {
   background: rgba(60, 30, 10, 0.86);
   border: 1px solid rgba(255, 176, 60, 0.42);
   z-index: 5;
+}
+
+.warn-actions {
+  display: flex;
+  gap: 6px;
+  margin-top: 7px;
+  flex-wrap: wrap;
 }
 
 .embed-warning p {

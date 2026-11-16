@@ -50,6 +50,10 @@ export function openReadyPopup(
     opts.lines = customChart.lines;
     opts.customChart = customChart;
   }
+  const myCharts = store.user.customCharts.filter(
+    (c) => c.videoId === song.videoId
+  );
+  let pickedChartId = customChart?.id ?? "";
 
   const rec = store.user.records[song.videoId];
   let modal: Modal;
@@ -140,6 +144,28 @@ export function openReadyPopup(
       </div>
     </div>
 
+    ${
+      customChart
+        ? ""
+        : `<div class="ready-section">
+      <div class="rs-label">${esc(t(store.settings.language, "opt_chart_source"))}</div>
+      <div class="seg wrap" data-chart-row>
+        <button class="seg-btn ${!pickedChartId ? "on" : ""}" data-chart="">${esc(tt("chart_default"))}</button>
+        ${myCharts
+          .map(
+            (c) =>
+              `<button class="seg-btn ${pickedChartId === c.id ? "on" : ""}" data-chart="${esc(c.id)}">${esc(c.title.slice(0, 18))} · ${c.npm}</button>`
+          )
+          .join("")}
+      </div>
+      ${
+        myCharts.length === 0
+          ? `<p class="hint">${esc(tt("no_custom_charts"))}</p>`
+          : ""
+      }
+    </div>`
+    }
+
     <div class="disc-hint">
       ${icon("disc", 14)}
       ${
@@ -151,6 +177,15 @@ export function openReadyPopup(
   `;
 
   const wire = (root: HTMLElement) => {
+    root.querySelectorAll<HTMLElement>("[data-chart]").forEach((b) =>
+      b.addEventListener("click", () => {
+        pickedChartId = b.dataset.chart ?? "";
+        const picked = store.user.customCharts.find((c) => c.id === pickedChartId);
+        opts.customChart = picked;
+        if (picked) opts.lines = picked.lines;
+        refresh();
+      })
+    );
     root.querySelectorAll<HTMLElement>("[data-orient]").forEach((b) =>
       b.addEventListener("click", () => {
         opts.orientation = b.dataset.orient as PlayOrientation;
@@ -215,7 +250,10 @@ export function openReadyPopup(
               useLongNote: opts.useLongNote,
               useSlideNote: opts.useSlideNote,
             });
-            onStart(opts);
+            const picked = pickedChartId
+              ? store.user.customCharts.find((c) => c.id === pickedChartId)
+              : undefined;
+            onStart({ ...opts, customChart: picked });
           },
         },
       ],

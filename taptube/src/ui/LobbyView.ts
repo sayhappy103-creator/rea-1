@@ -37,6 +37,7 @@ export class LobbyView {
   private query = "";
   private category: SearchCategory = "all";
   private sort: SortMode = "popular";
+  private rankScope: "global" | "country" = "global";
   private results: YtItem[] = [];
   private searching = false;
   private searchError = false;
@@ -426,6 +427,7 @@ export class LobbyView {
                 </div>
                 <div class="cc-actions">
                   <button class="btn tiny primary" data-play-chart="${esc(c.id)}">${icon("play", 13)} ${esc(tt("play_now"))}</button>
+                  <button class="btn tiny ghost" data-rate-chart="${esc(c.id)}">${icon("star", 13)}</button>
                   <button class="btn tiny ghost" data-edit-chart="${esc(c.id)}">${icon("edit", 13)}</button>
                   <button class="btn tiny ghost danger" data-del-chart="${esc(c.id)}">${icon("trash", 13)}</button>
                 </div>
@@ -521,6 +523,12 @@ export class LobbyView {
         void modal;
       });
     });
+    this.listHost.querySelectorAll<HTMLElement>("[data-rate-chart]").forEach((b) => {
+      b.addEventListener("click", (e) => {
+        e.stopPropagation();
+        this.openChartRating(b.dataset.rateChart!);
+      });
+    });
     this.listHost.querySelectorAll<HTMLElement>("[data-replay]").forEach((b) => {
       b.addEventListener("click", () =>
         this.handlers.onWatchReplay(b.dataset.replay!)
@@ -528,22 +536,64 @@ export class LobbyView {
     });
   }
 
+  private openChartRating(chartId: string): void {
+    const chart = store.user.customCharts.find((c) => c.id === chartId);
+    if (!chart) return;
+    const mine = store.user.ratedChartIds[chartId];
+    const modal = new Modal(
+      tt("rate_chart"),
+      `<p class="modal-text">${esc(chart.title)}</p>
+       <div class="rate-stars">
+         ${[1, 2, 3, 4, 5]
+           .map(
+             (n) =>
+               `<button class="rate-star ${mine && n <= mine ? "on" : ""}" data-star="${n}">${icon(
+                 "star",
+                 22
+               )}</button>`
+           )
+           .join("")}
+       </div>
+       <p class="hint">${esc(tt("chart_npm"))} ${chart.npm} · ${esc(tt("plays"))} ${chart.playCount}</p>`,
+      { buttons: [{ label: tt("btn_close"), kind: "ghost" }] }
+    );
+    modal.body().querySelectorAll<HTMLElement>("[data-star]").forEach((btn) => {
+      btn.addEventListener("click", () => {
+        const stars = Number(btn.dataset.star);
+        const prev = store.user.ratedChartIds[chartId];
+        if (prev) {
+          chart.ratingSum -= prev;
+          chart.ratingCount = Math.max(0, chart.ratingCount - 1);
+        }
+        chart.ratingSum += stars;
+        chart.ratingCount += 1;
+        store.user.ratedChartIds[chartId] = stars;
+        store.save();
+        soundEngine.playRewardChime(store.settings, "coin");
+        toast(tt("rating_thanks"), "ok");
+        modal.close();
+        this.renderContent();
+      });
+    });
+  }
+
   private renderRanking(): void {
-    const all = [...store.user.replays];
-    // Add seeded global entries from starter replays already in memory
-    const unique = new Map<string, typeof all[number]>();
-    for (const r of all) unique.set(r.id, r);
-    const list = [...unique.values()]
-      .sort((a, b) => b.score - a.score)
-      .slice(0, 50);
+    const scope = this.rankScope;
+    const unique = new Map<string, typeof store.user.replays[number]>();
+    for (const r of store.user.replays) unique.set(r.id, r);
+    const pool = [...unique.values()].filter((r) =>
+      scope === "country" ? r.country === store.settings.countryCode : true
+    );
+    const list = pool.sort((a, b) => b.score - a.score).slice(0, 50);
     const meBest = list.find((r) => r.playerName === store.user.nickname);
 
     this.listHost.innerHTML = `
       <div class="section-head">
         <h3>${esc(tt("ranking_title"))}</h3>
-        <span class="muted">${flagOf(store.settings.countryCode)} ${esc(
-      tt("ranking_global")
-    )}</span>
+        <div class="seg rank-scope">
+          <button class="seg-btn ${scope === "global" ? "on" : ""}" data-scope="global">${esc(tt("ranking_global"))}</button>
+          <button class="seg-btn ${scope === "country" ? "on" : ""}" data-scope="country">${esc(tt("ranking_country"))}</button>
+        </div>
       </div>
       <div class="rank-list">
         ${list
@@ -570,7 +620,39 @@ export class LobbyView {
         <b>${meBest ? `#${list.indexOf(meBest) + 1}` : "-"}</b>
         <span class="muted">${meBest ? fmtInt(meBest.score) : ""}</span>
       </div>
+      ${
+        list.length
+          ? `<div class="section-head spaced"><h3>${esc(tt("replay_badge"))}</h3><span class="muted">${flagOf(
+              store.settings.countryCode
+            )}</span></div>
+             <div class="replay-list">${list
+               .slice(0, 12)
+               .map(
+                 (r) => `
+               <button class="replay-row" data-replay="${esc(r.id)}">
+                 <img src="${esc(r.videoThumbnail)}" alt="" loading="lazy" />
+                 <span class="rr-main"><b>${esc(r.videoTitle.slice(0, 44))}</b><em>${esc(
+                   r.playerName
+                 )} · #${list.indexOf(r) + 1} · ${fmtInt(r.score)}</em></span>
+                 <span class="grade grade-${r.grade.toLowerCase()}">${r.grade}</span>
+                 ${icon("play", 14)}
+               </button>`
+               )
+               .join("")}</div>`
+          : ""
+      }
     `;
+    this.listHost.querySelectorAll<HTMLElement>("[data-scope]").forEach((b) =>
+      b.addEventListener("click", () => {
+        this.rankScope = b.dataset.scope as "global" | "country";
+        this.renderContent();
+      })
+    );
+    this.listHost.querySelectorAll<HTMLElement>("[data-replay]").forEach((b) =>
+      b.addEventListener("click", () =>
+        this.handlers.onWatchReplay(b.dataset.replay!)
+      )
+    );
   }
 
   private cardHtml(song: YtItem, idx: number): string {

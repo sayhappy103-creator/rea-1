@@ -248,6 +248,7 @@ export interface TapTubeNativeBridge {
   fetchOEmbed?: (urlOrId: string) => string;
   vibrate?: (durationMs: number) => void;
   setOrientation?: (mode: string) => void;
+  setImmersive?: (enabled: boolean) => void;
   shareText?: (title: string, text: string) => void;
   getSharedYoutubeUrl?: () => string;
   isAndroidApp?: () => boolean;

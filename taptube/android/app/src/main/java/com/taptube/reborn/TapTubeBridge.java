@@ -62,6 +62,12 @@ public class TapTubeBridge {
     @JavascriptInterface
     public void setOrientation(String mode) {
         activity.applyOrientation(mode);
+        activity.setImmersive("landscape".equals(mode));
+    }
+
+    @JavascriptInterface
+    public void setImmersive(boolean enabled) {
+        activity.setImmersive(enabled);
     }
 
     @JavascriptInterface

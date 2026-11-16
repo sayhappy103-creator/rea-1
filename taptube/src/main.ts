@@ -107,11 +107,6 @@ class App {
   }
 
   private selectSong(song: YtItem): void {
-    const chart = store.user.customCharts.find((c) => c.videoId === song.videoId);
-    if (chart && store.user.records[song.videoId] === undefined) {
-      openReadyPopup(song, (options) => this.startPlay(song, options), chart.id);
-      return;
-    }
     openReadyPopup(song, (options) => this.startPlay(song, options));
   }
 

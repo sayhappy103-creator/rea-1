@@ -71,8 +71,13 @@ public class MainActivity extends AppCompatActivity {
         s.setUserAgentString(
                 s.getUserAgentString().replace("; wv", "") + " TapTubeReborn/1.6.5");
 
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.LOLLIPOP) {
-            s.setMixedContentMode(WebSettings.MIXED_CONTENT_NEVER_ALLOW);
+        // The game only ever loads our own intercepted assets on https://localhost.
+        s.setAllowUniversalAccessFromFileURLs(false);
+        s.setAllowFileAccessFromFileURLs(false);
+        s.setSaveFormData(false);
+        s.setGeolocationEnabled(false);
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+            s.setSafeBrowsingEnabled(true);
         }
 
         webView.addJavascriptInterface(new TapTubeBridge(this, webView), "TapTubeNative");
@@ -216,6 +221,22 @@ public class MainActivity extends AppCompatActivity {
                 setRequestedOrientation(ActivityInfo.SCREEN_ORIENTATION_PORTRAIT);
             } else {
                 setRequestedOrientation(ActivityInfo.SCREEN_ORIENTATION_UNSPECIFIED);
+            }
+        });
+    }
+
+    void setImmersive(boolean enabled) {
+        runOnUiThread(() -> {
+            View decor = getWindow().getDecorView();
+            if (enabled) {
+                decor.setSystemUiVisibility(
+                        View.SYSTEM_UI_FLAG_LAYOUT_STABLE
+                                | View.SYSTEM_UI_FLAG_LAYOUT_HIDE_NAVIGATION
+                                | View.SYSTEM_UI_FLAG_LAYOUT_FULLSCREEN
+                                | View.SYSTEM_UI_FLAG_HIDE_NAVIGATION
+                                | View.SYSTEM_UI_FLAG_FULLSCREEN);
+            } else {
+                decor.setSystemUiVisibility(View.SYSTEM_UI_FLAG_LAYOUT_STABLE);
             }
         });
     }

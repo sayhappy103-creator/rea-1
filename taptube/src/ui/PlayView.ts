@@ -16,6 +16,7 @@ import { tt } from "./TopBar";
 import { toast } from "./Modal";
 import { t } from "../i18n";
 import { openShareSheet } from "./Popups";
+import { searchYouTubeSongs } from "../youtube";
 
 export interface PlaySessionConfig {
   song: YtItem;
@@ -37,6 +38,8 @@ export class PlayView {
   private countdownOverlay: HTMLElement | null = null;
   private metronomeOn = false;
   private finished = false;
+  private lastCombo = 0;
+  private slideTimer = 0;
 
   constructor(
     private cfg: PlaySessionConfig,
@@ -52,6 +55,7 @@ export class PlayView {
     const opt = this.cfg.options;
     this.el.innerHTML = `
       <div class="play-stage">
+        <div class="bg-layer" data-bg></div>
         <div class="video-layer" data-video></div>
         <div class="video-shade"></div>
         <canvas class="road-canvas" data-canvas></canvas>
@@ -79,6 +83,10 @@ export class PlayView {
         <div class="countdown" data-count hidden></div>
         <div class="embed-warning" data-warn hidden>
           <p>${esc(tt("embed_error"))}</p>
+          <div class="warn-actions">
+            <button class="btn tiny primary" data-alt-audio>${icon("search", 12)} ${esc(tt("find_alt"))}</button>
+            <button class="btn tiny ghost" data-synth-mode>${icon("volume", 12)} ${esc(tt("btn_play_synth_mode"))}</button>
+          </div>
         </div>
       </div>
       <div class="pause-overlay" data-pause-layer hidden>
@@ -114,6 +122,17 @@ export class PlayView {
     `;
     this.canvas = this.el.querySelector("[data-canvas]") as HTMLCanvasElement;
     this.videoLayer = this.el.querySelector("[data-video]") as HTMLElement;
+    this.applyVideoStyle();
+    this.el.querySelector("[data-synth-mode]")?.addEventListener("click", () => {
+      this.dismissWarning();
+      this.engine?.enableSynthClock(true);
+      this.playback?.destroy();
+      this.playback = null;
+      (this.el.querySelector("[data-warn]") as HTMLElement).hidden = true;
+    });
+    this.el.querySelector("[data-alt-audio]")?.addEventListener("click", () => {
+      void this.findAlternativeAudio();
+    });
 
     this.el.querySelector("[data-pause]")?.addEventListener("click", () => this.openPause());
     this.el.querySelector("[data-resume]")?.addEventListener("click", () => this.closePause());
@@ -147,9 +166,101 @@ export class PlayView {
     });
 
     window.TapTubeNative?.setOrientation?.(this.cfg.options.orientation);
+    window.TapTubeNative?.setImmersive?.(true);
     document.body.classList.add(
       this.cfg.options.orientation === "landscape" ? "landscape" : "portrait"
     );
+  }
+
+  private dismissWarning(): void {
+    const warn = this.el.querySelector("[data-warn]") as HTMLElement;
+    if (warn) warn.hidden = true;
+  }
+
+  private isWifiOnlyBlocked(): boolean {
+    if (store.settings.streamingMode !== "wifi") return false;
+    const conn = (navigator as any).connection;
+    if (!conn || !conn.type) return false;
+    return conn.type !== "wifi" && conn.type !== "ethernet";
+  }
+
+  private applyVideoStyle(): void {
+    const s = store.settings;
+    const zoom = Math.max(50, Math.min(100, s.videoZoom));
+    const bright = Math.max(15, Math.min(100, s.videoBrightness));
+    const scale = 1 + (100 - zoom) / 100;
+    this.videoLayer.style.transform = `scale(${scale.toFixed(3)})`;
+    this.videoLayer.style.filter = `brightness(${(bright / 100).toFixed(2)}) saturate(1.05)`;
+
+    const bg = this.el.querySelector("[data-bg]") as HTMLElement;
+    if (!bg) return;
+    const mode = s.videoBgMode;
+    if (mode === "image") {
+      bg.style.backgroundImage = `url("${this.cfg.song.thumbnail}")`;
+      bg.style.opacity = "0.55";
+    } else if (mode === "slideshow") {
+      const pool = [...store.user.favorites, ...store.user.history]
+        .map((x) => x.thumbnail)
+        .filter(Boolean);
+      const thumbs = pool.length ? pool : [this.cfg.song.thumbnail];
+      let i = 0;
+      bg.style.backgroundImage = `url("${thumbs[0]}")`;
+      bg.style.opacity = "0.5";
+      this.slideTimer = window.setInterval(() => {
+        i = (i + 1) % thumbs.length;
+        bg.style.opacity = "0.18";
+        window.setTimeout(() => {
+          bg.style.backgroundImage = `url("${thumbs[i]}")`;
+          bg.style.opacity = "0.5";
+        }, 260);
+      }, 6200);
+    } else {
+      bg.style.backgroundImage = "";
+      bg.style.opacity = "0";
+    }
+  }
+
+  private async findAlternativeAudio(): Promise<void> {
+    this.dismissWarning();
+    const query = `${this.cfg.song.title.replace(/\[.*?\]/g, "").trim()} audio`;
+    try {
+      const found = await searchYouTubeSongs(
+        query,
+        "music",
+        store.settings.countryCode,
+        store.settings.youtubeApiKey
+      );
+      const alt = found.find(
+        (x) => x.videoId !== this.cfg.song.videoId && x.durationSec >= 45
+      );
+      if (!alt) {
+        toast(tt("search_failed"), "warn");
+        this.engine?.enableSynthClock(true);
+        return;
+      }
+      this.cfg.song = alt;
+      const layer = this.el.querySelector("[data-video]") as HTMLElement;
+      if (!this.playback) {
+        this.playback = new YouTubePlayback(layer, alt, store.settings);
+        this.playback.onError(() => {
+          const warn = this.el.querySelector("[data-warn]") as HTMLElement;
+          if (warn) warn.hidden = false;
+          this.engine?.enableSynthClock(true);
+        });
+      }
+      await this.playback.prepare();
+      if (this.playback.fallbackMode) {
+        this.engine?.enableSynthClock(true);
+        toast(tt("embed_error"), "warn");
+        return;
+      }
+      this.playback.setVolume(72);
+      await this.playback.play();
+      this.engine?.enableSynthClock(false);
+      toast(`✓ ${alt.title.slice(0, 42)}`, "ok");
+    } catch {
+      toast(tt("search_failed"), "warn");
+    }
   }
 
   private async boot(): Promise<void> {
@@ -158,10 +269,7 @@ export class PlayView {
 
     // Prepare YouTube playback in the background; the beat-synth clock drives
     // the chart until real video time is available.
-    if (
-      store.settings.videoBgMode === "video" &&
-      store.settings.streamingMode === "always"
-    ) {
+    if (store.settings.videoBgMode === "video" && !this.isWifiOnlyBlocked()) {
       this.playback = new YouTubePlayback(
         this.videoLayer,
         song,
@@ -271,6 +379,7 @@ export class PlayView {
         seg.classList.toggle("on", i < hud.feverSegmentFill || hud.feverStage >= 5);
       });
     }
+    this.lastCombo = hud.combo;
     const now = performance.now();
     const beatMs = 60000 / Math.max(60, this.cfg.bpm);
     if (
@@ -298,7 +407,7 @@ export class PlayView {
     const accNode = this.el.querySelector('[data-hud="acc"]');
     if (ps && scoreNode) ps.textContent = scoreNode.textContent ?? "0";
     if (pa && accNode) pa.textContent = accNode.textContent ?? "100%";
-    if (pc) pc.textContent = "—";
+    if (pc) pc.textContent = String(this.lastCombo);
   }
 
   private closePause(): void {
@@ -404,7 +513,9 @@ export class PlayView {
   }
 
   public destroy(): void {
+    window.TapTubeNative?.setImmersive?.(false);
     window.clearInterval(this.hudTimer);
+    window.clearInterval(this.slideTimer);
     this.engine?.destroy();
     this.playback?.destroy();
     document.body.classList.remove("landscape", "portrait");
