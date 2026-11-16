@@ -11,6 +11,12 @@ gameplay system reproduced from binary analysis and **all in-app purchases remov
 * 🌐 ไทย / English / 日本語 / 한국어
 * 📱 Ships as a universal, v1+v2+v3-signed APK (`minSdk 24`, `targetSdk 34`)
 
+## Download
+
+* Google Drive: <https://drive.google.com/file/d/1RB2yb-J6wfXRT3TlkTtOG0I0b8N2auEe/view>
+* GitHub Release: <https://github.com/sayhappy103-creator/rea-1/releases/tag/taptube-reborn-1.6.5-noiap>
+* Thai install guide: [`docs/INSTALL_TH.md`](docs/INSTALL_TH.md)
+
 ## Develop
 
 ```bash

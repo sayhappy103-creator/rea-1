@@ -1,11 +1,11 @@
 # วิธีติดตั้งและเล่น TapTube Reborn 1.6.5 (No IAP)
 
 ## 1. โหลดไฟล์ APK
-- **Google Drive:** https://drive.google.com/file/d/1G0ObM9GK5jhtwNVPlcRPPSTu53UaOSa1/view
+- **Google Drive:** https://drive.google.com/file/d/1RB2yb-J6wfXRT3TlkTtOG0I0b8N2auEe/view
 - **GitHub Release:** https://github.com/sayhappy103-creator/rea-1/releases/tag/taptube-reborn-1.6.5-noiap
 - ในซอร์สโค้ด: `taptube/dist-apk/TapTube-1.6.5-Reborn-NoIAP.apk`
 
-ไฟล์: `TapTube-1.6.5-Reborn-NoIAP.apk` · ~2.4 MB · ลงชื่อ v1+v2+v3 · minSdk 24 (Android 7.0+) · targetSdk 34
+ไฟล์: `TapTube-1.6.5-Reborn-NoIAP.apk` · ~2.7 MB · ลงชื่อ v1+v2+v3 · minSdk 24 (Android 7.0+) · targetSdk 34
 ตรวจสอบไฟล์: เทียบ SHA-256 กับบรรทัดใน `TapTube-1.6.5-Reborn-NoIAP.apk.sha256`
 
 ## 2. ติดตั้ง
