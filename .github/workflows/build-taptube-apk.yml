@@ -100,7 +100,12 @@ jobs:
           {
             echo "# Gradle failure log"
             echo '```'
-            grep -viE "^(Download|> Task .* (UP-TO-DATE|NO-SOURCE|SKIPPED))" /tmp/gradle.log 2>/dev/null | tail -200 || true
+            grep -nE "error:|warning: \[|FAILURE:|What went wrong|Execution failed|AAPT|resource .* not found|Caused by:" /tmp/gradle.log 2>/dev/null | head -120 || true
+            echo '```'
+            echo
+            echo "## Raw tail"
+            echo '```'
+            tail -60 /tmp/gradle.log 2>/dev/null || true
             echo '```'
           } > taptube/dist-apk/BUILD_ERROR.md
           git add -f taptube/dist-apk/BUILD_ERROR.md
