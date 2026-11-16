@@ -108,6 +108,19 @@ jobs:
           BT="$ANDROID_HOME/build-tools/34.0.0"
           "$BT/aapt2" dump badging out/TapTube-1.6.5-Reborn-NoIAP.apk | head -20
 
+      - name: Commit APK into the repository for delivery
+        run: |
+          mkdir -p taptube/dist-apk
+          cp out/TapTube-1.6.5-Reborn-NoIAP.apk taptube/dist-apk/TapTube-1.6.5-Reborn-NoIAP.apk
+          sha256sum taptube/dist-apk/TapTube-1.6.5-Reborn-NoIAP.apk \
+            > taptube/dist-apk/TapTube-1.6.5-Reborn-NoIAP.apk.sha256
+          git config user.name "taptube-bot"
+          git config user.email "taptube-bot@users.noreply.github.com"
+          git add -f taptube/dist-apk
+          git diff --cached --quiet && exit 0
+          git commit -m "build(taptube): publish signed TapTube 1.6.5 Reborn APK build"
+          git push
+
       - uses: actions/upload-artifact@v4
         with:
           name: TapTube-1.6.5-Reborn-NoIAP
